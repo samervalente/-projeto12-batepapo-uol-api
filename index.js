@@ -21,7 +21,7 @@ client.connect().then(() => {
 
 let time = `${dayjs().hour()}:${dayjs().minute()}:${dayjs().second()}`;
 
-//Rota participants que faz o registro do nome de usuário
+//Endpoint que faz o registro do nome de usuário
 server.post("/participants", async (req, res) => {
   const userName = req.body;
 
@@ -62,11 +62,13 @@ server.post("/participants", async (req, res) => {
   }
 });
 
+//Endpoint que disponibiliza a lista de participantes
 server.get("/participants", async (req, res) => {
   const participants = await db.collection("participants").find().toArray();
   res.send(participants);
 });
 
+//Endpoint para envio de mensagens
 server.post("/messages", async (req, res) => {
   let message = req.body;
   const from = req.headers.user;
@@ -98,7 +100,7 @@ server.post("/messages", async (req, res) => {
  
 });
 
-//Pegar as mensagens pertinentes ao usuário logado
+//Endpoint que disponibiliza as mensagens pertinentes ao usuário logado
 server.get("/messages", async (req, res) => {
   const userLog = req.headers.user;
   const limit = req.query.limit;
@@ -121,7 +123,7 @@ server.get("/messages", async (req, res) => {
     
 });
 
-//Atualizar o status do usuário
+//Endpoint para atualizar o status do usuário
 server.post("/status", async (req, res) => {
   const userName = req.headers.user;
 
@@ -138,7 +140,7 @@ server.post("/status", async (req, res) => {
   }
 });
 
-//Deletar mensagens
+//Endpoint para deletar mensagens
 server.delete("/messages/:id", async (req, res) => {
   const name = req.headers.user;
   const id = req.params.id;
@@ -157,7 +159,7 @@ server.delete("/messages/:id", async (req, res) => {
   } 
 });
 
-//Edição de mensagens
+//Endpoint para edição de mensagens
 server.put("/messages/:id", async (req, res) => {
   const message = req.body;
   const from = req.headers.user;

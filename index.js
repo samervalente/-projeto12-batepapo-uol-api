@@ -85,7 +85,7 @@ server.post("/messages", async (req, res) => {
   
   const result = schema.validate(message);
   if (result.error) {
-    console.log(result.error)
+
     return res.sendStatus(422);
   }
   message = { ...message, from, time }
@@ -103,8 +103,8 @@ server.post("/messages", async (req, res) => {
 //Endpoint que disponibiliza as mensagens pertinentes ao usuário logado
 server.get("/messages", async (req, res) => {
   const userLog = req.headers.user;
-  const limit = req.query.limit;
-  
+  const limit = Number(req.query.limit);
+
   try {
     let mensagens = await  db.collection("mensagens").find().toArray()
       mensagens = mensagens.slice(-limit);

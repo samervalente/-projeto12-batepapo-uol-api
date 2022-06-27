@@ -1,11 +1,10 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { MongoClient } from "mongodb";
+import { MongoClient, ObjectId } from "mongodb";
 import Joi from "joi";
 import dayjs from "dayjs";
-import {stripHtml} from "string-strip-html"
-import {ObjectId} from "mongodb"
+import { stripHtml } from "string-strip-html";
 
 dotenv.config();
 
@@ -13,22 +12,22 @@ const server = express();
 server.use([cors(), express.json()]);
 
 //Conexão com o database "uoldb"
-const client = new MongoClient(process.env.MONGO_URL);
+const client = new MongoClient(process.env.MONGO_URI);
 let db;
 
 client.connect().then(() => {
   db = client.db("uoldb");
 });
 
-const time = `${dayjs().hour()}:${dayjs().minute()}:${dayjs().second()}`;
+let time = `${dayjs().hour()}:${dayjs().minute()}:${dayjs().second()}`;
 
 //Rota participants que faz o registro do nome de usuário
-server.post("/participants", (req, res) => {
-  const userName = req.body
+server.post("/participants", async (req, res) => {
+  const userName = req.body;
 
   //Validação do nome de usuário com a biblioteca joi
   const schema = Joi.object().keys({
-    name: Joi.string().required(),
+    name: Joi.string().pattern(/^[a-z]+$/i).required(),
   });
 
   const result = schema.validate(userName);
@@ -36,151 +35,175 @@ server.post("/participants", (req, res) => {
     return res.sendStatus(422);
   }
 
-  db.collection("participants")
-    .findOne(userName)
-    .then((user) => {
-      if (user) {
-        return res.sendStatus(409);
-      } else {
-        //Sanitizando nome do usuário
-        userName.name = stripHtml(userName.name).result.trim()
-       
-        const participant = { ...userName, lastStatus: Date.now() };
-        db.collection("participants").insertOne(participant);
+  try {
+    const user = await db.collection("participants").findOne(userName);
+    if (user) {
+      return res.sendStatus(409);
+    }
+    //Sanitizando nome do usuário
+    userName.name = stripHtml(userName.name).result.trim();
 
-        const mensagem = {
-          from: userName.name,
-          to: "Todos",
-          text: "entra na sala...",
-          type: "status",
-          time,
-        };
+    const participant = { ...userName, lastStatus: Date.now() };
+    await db.collection("participants").insertOne(participant);
 
-        db.collection("mensagens").insertOne(mensagem);
+    const mensagem = {
+      from: userName.name,
+      to: "Todos",
+      text: "entra na sala...",
+      type: "status",
+      time,
+    };
 
-        res.status(201).send("Usuário registrado");
-      }
-    });
+    await db.collection("mensagens").insertOne(mensagem);
+    res.status(201).send("Usuário registrado");
+
+  } catch (error) {
+    return res.sendStatus(500);
+  }
 });
 
-server.get("/participants", (req, res) => {
-  db.collection("participants")
-    .find()
-    .toArray()
-    .then((participants) => {
-      res.send(participants);
-    });
+server.get("/participants", async (req, res) => {
+  const participants = await db.collection("participants").find().toArray();
+  res.send(participants);
 });
 
-server.post("/messages", (req, res) => {
+server.post("/messages", async (req, res) => {
   let message = req.body;
   const from = req.headers.user;
 
   const schema = Joi.object().keys({
     to: Joi.string().required(),
     text: Joi.string().required(),
-    type: Joi.string().required(),
-    from: Joi.string(),
-    time: Joi.string(),
+    type: Joi.string().valid("message","private_message").required(),
+    
+    
   });
   //Sanitizando a mensagem de texto enviada pelo usuário
-  message.text = stripHtml(message.text).result.trim()
-  message = { ...message, from, time };
+  message.text = stripHtml(message.text).result.trim();
+  
+  const result = schema.validate(message);
+  if (result.error) {
+    console.log(result.error)
+    return res.sendStatus(422);
+  }
+  message = { ...message, from, time }
+
+  try {
+    await db.collection("mensagens").insertOne(message)
+    res.send(message);
+  
+  } catch (error) {
+    return res.sendStatus(500)
+  }
+ 
+});
+
+//Pegar as mensagens pertinentes ao usuário logado
+server.get("/messages", async (req, res) => {
+  const userLog = req.headers.user;
+  const limit = req.query.limit;
+  
+  try {
+    let mensagens = await  db.collection("mensagens").find().toArray()
+      mensagens = mensagens.slice(-limit);
+      let msgsUser = mensagens.filter(
+        (msg) =>
+          msg.type === "status" ||
+          msg.to === userLog ||
+          msg.from === userLog ||
+          msg.to === "Todos"
+      );
+
+      res.send(msgsUser);
+  } catch (error) {
+      res.sendStatus(500)
+  }
+    
+});
+
+//Atualizar o status do usuário
+server.post("/status", async (req, res) => {
+  const userName = req.headers.user;
+
+  try {
+    const participant = await db.collection("participants").findOne({ name: userName })
+
+    if(!participant) return res.sendStatus(404)
+
+    await db.collection("participants").updateOne({ name: userName },{$set: { lastStatus: Date.now() }})
+    res.sendStatus(200);
+
+  } catch (error) {
+    res.sendStatus(500)
+  }
+});
+
+//Deletar mensagens
+server.delete("/messages/:id", async (req, res) => {
+  const name = req.headers.user;
+  const id = req.params.id;
+
+  try {
+    const msg = await db.collection("mensagens").findOne({ _id: ObjectId(id) })
+
+    if(!msg) return res.sendStatus(404)
+    if(msg.from !== name) return res.sendStatus(401)
+
+    await db.collection("mensagens").deleteOne(msg)
+    res.status(200).send(msg);
+
+  } catch (error) {
+    res.sendStatus(500)
+  } 
+});
+
+//Edição de mensagens
+server.put("/messages/:id", async (req, res) => {
+  const message = req.body;
+  const from = req.headers.user;
+  const id = req.params.id;
+
+  const schema = Joi.object().keys({
+    to: Joi.string().required(),
+    text: Joi.string().required(),
+    type: Joi.string().valid("message", "private_message").required(),
+  });
+
   const result = schema.validate(message);
   if (result.error) {
     return res.sendStatus(422);
   }
 
-  db.collection("mensagens")
-    .insertOne(message)
-    .then(() => {
-      res.send(message);
-    });
+  try {
+    const msg = db.collection("mensagens").findOne({ _id: ObjectId(id) })
+
+    if(!msg) return res.sendStatus(404)
+    if(msg.from !== from) return res.sendStatus(401);
+
+    time = `${dayjs().hour()}:${dayjs().minute()}:${dayjs().second()}`;
+
+    await db.collection("mensagens").updateOne({ _id: ObjectId(id) },{$set: { ...message, time }});
+
+    res.status(200).send("Mensagem atualizada")
+
+  } catch (error) {
+    res.sendStatus(500)
+  }
+
 });
 
-server.get("/messages", (req, res) => {
-  const userLog = req.headers.user;
+//Remoção de participantes inativos
+setInterval( async () => {
 
-  db.collection("mensagens")
-    .find()
-    .toArray()
-    .then((mensagens) => {
-      let msgs = mensagens.filter(
-        (msg) =>
-          msg.type === "status" ||
-          msg.to === userLog ||
-          msg.from === userLog ||
-          msg.type === "message"
-      );
+  const participants = await db.collection("participants").find().toArray()
 
-      res.send(msgs);
-    });
-});
-
-server.post('/status', (req,res) => {
-    const userName = req.headers.user
-
-         db.collection("participants").findOne({name: userName}).then(participant => {
-       if(participant){
-        db.collection("participants").updateOne({name: userName}, {
-            $set: {lastStatus:Date.now()}
-            
-        })
-        res.sendStatus(200)
-       }else{
-        return res.sendStatus(404)
-       }
-    })
-   
-    
-})
-
-server.delete("/messages/:id",(req, res) => {
-    const name = req.headers.user
-    const id = req.params.id
-   
-console.log(id)
-  db.collection("mensagens").findOne({_id: ObjectId(id)}).then(msg => {
-    console.log(msg)
-    if(!msg){
-      return  res.sendStatus(404)
+  participants.map( async (participant) => { 
+    if ((Date.now() - participant.lastStatus) / 1000 > 10){
+      await db.collection("participants").deleteOne(participant)
+      await db.collection("mensagens").insertOne({from: participant.name, to: "Todos", text: "sai da sala...",type: "status",time,});
     }
-    if(msg.from !== name){
-      return res.sendStatus(401)
-    }
-
-    db.collection("mensagens").deleteOne(msg).then(() => {
-      res.status(200).send(msg)
-    })
-    
-  
-
   })
 
-})
-
-setInterval(() => {
-    db.collection("participants")
-      .find()
-      .toArray()
-      .then((participants) => {
-        participants.map((participant) => {
-          if ((Date.now() - participant.lastStatus) / 1000 > 10) {
-            db.collection("participants")
-              .deleteOne(participant)
-              .then(() => {
-                db.collection("mensagens").insertOne({
-                  from: participant.name,
-                  to: "Todos",
-                  text: "sai da sala...",
-                  type: "status",
-                  time,
-                });
-               });
-          }
-        });
-      });
-  }, 15000);
-
+}, 15000);
 
 server.listen(5000);
